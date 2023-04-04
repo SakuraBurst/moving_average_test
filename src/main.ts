@@ -1,5 +1,6 @@
 import {Ticker} from "ccxt";
 import TelegramBot from "node-telegram-bot-api";
+import {number} from "ccxt/js/src/static_dependencies/noble-hashes/_assert";
 
 let ccxt = require('ccxt');
 
@@ -56,12 +57,11 @@ class Position {
                 console.log('Стоп-лосс срабатывает, продавать');
                 let order = await binance.createMarketSellOrder(this.symbol, this.amount);
                 console.log(order);
-                await bot.sendMessage(chatId, `Бот сделал стоплосс на цене ${currentPrice} и продал ${this.amount}${this.crypto}`)
+                await sendTelegramMessage(`Бот сделал стоплосс на цене ${currentPrice} и продал ${this.amount}${this.crypto}`)
             }catch (e) {
-                await bot.sendMessage(chatId, e.message)
+                await sendTelegramMessage(e.message)
             }
             return true;
-
         }
         return false;
     }
@@ -78,13 +78,22 @@ class Positions {
         return this.findAllPositionsBySymbol(symbol).filter(a => ticker.last >= a.minSellPrice )
     }
 
-    async calculateSellPriceByPositions(symbol: string, ticker:Ticker):number {
+    async calculateSellPriceByPositions(symbol: string, ticker:Ticker):Promise<number> {
         const pos = this.findAllPositionsByLowestPrice(symbol, ticker)
         let amount = 0
         for (let i = 0; i < pos.length/2; i++) {
             amount+=pos[i].amount
+            this.deletePositionsByAmountAndSymbol(symbol, pos[i].amount)
         }
         return await safeAmountToPrecision(symbol, amount);
+    }
+
+    deletePositionsByAmountAndSymbol(symbol:string, amount:number):void{
+        const index = this.positions.findIndex((a) => a.symbol === symbol && a.amount === amount)
+        if (index === -1) {
+            return
+        }
+        this.positions.splice(index, 1)
     }
 
     stopLossService(interval:number) {
@@ -113,17 +122,6 @@ class Positions {
 let positions = new Positions()
 
 
-async function checkPositions() {
-    for (let i = 0; i < positions.length; i++) {
-        const position = positions[i];
-        const isStopLossTriggered = await position.checkStopLoss();
-        if (isStopLossTriggered) {
-            positions.splice(i, 1);
-            i--;
-        }
-    }
-}
-
 async function main() {
     positions.stopLossService(1000 * 60 * 2)
     await calculateFees('ETH/USDT', 'BTC/USDT')
@@ -135,12 +133,12 @@ async function main() {
     }
 }
 
-const fees = {}
+const fees: { [k: string]: number } = {}
 
 async function calculateFees(...symbols:string[]):Promise<void> {
     await binance.loadMarkets();
     for (const symbol of symbols) {
-        fees[symbol] = binance.market(symbol) * 2
+        fees[symbol] = binance.market(symbol).taker * 2
     }
 
 
@@ -152,27 +150,24 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
         const historicalOHLCV = await binance.fetchOHLCV(symbol, config.timeframe);
         const rsi = calculateRSI(historicalOHLCV, config.rsiPeriod);
         const [lowerBB, middleBB, upperBB] = calculateBollingerBands(historicalOHLCV, config.bollingerPeriod, config.bollingerMultiplier);
-        console.log(`RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
         const ticker = await binance.fetchTicker(symbol);
         const prices =  await preparePrices(symbol, crypto, ticker)
         let rsiLog = "RSI:"
         let bbLog = "BB: "
         rsiLog += rsi <= 30  ? " Покупать" : rsi > 70  ? " Продавать" : " Сидеть"
         bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть"
-        console.log(rsiLog)
-        console.log(bbLog)
-        const allSymbolPositions = positions.find(a => a.symbol === symbol && ticker.last >= a.minSellPrice)
-
+        console.log(`Your balance in ${symbol}: ${prices.balanceCrypto}/${prices.balanceUSDT}|${rsiLog} | ${bbLog} | RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
+        const toSell = await positions.calculateSellPriceByPositions(symbol, ticker)
         if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
             console.log('Покупать');
             let order = await  binance.createMarketBuyOrder(symbol, prices.toBuy)
-            positions.push(new Position(symbol,crypto, prices.toBuy, ticker.last))
-            await bot.sendMessage(chatId, `Бот купил ${prices.toBuy}${crypto} по цене ${ticker.last}`)
+            positions.setPosition(new Position(symbol,crypto, prices.toBuy, ticker.last))
+            await sendTelegramMessage(`Бот купил ${prices.toBuy}${crypto} по цене ${ticker.last}`)
             console.log(order)
-        } else if (rsi > 70 && ticker.last > upperBB && prices.balanceCrypto > prices.d10 && ticker.last >= minSellPrice) {
+        } else if (rsi > 70 && ticker.last > upperBB && toSell > prices.d10) {
             console.log('Продавать');
-            let order = await  binance.createMarketSellOrder(symbol, prices.toSell)
-            await bot.sendMessage(chatId, `Бот продал ${prices.toSell}${crypto} по цене ${ticker.last}`)
+            let order = await  binance.createMarketSellOrder(symbol, toSell)
+            await sendTelegramMessage( `Бот продал ${toSell}${crypto} по цене ${ticker.last}`)
             console.log(order)
         } else {
             console.log('Нет четкого сигнала, ожидайте');
@@ -182,8 +177,12 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
     }
 }
 
-function calculateSellAmount(ticker: Ticker) {
-
+async function sendTelegramMessage(message: string) {
+    try {
+        await bot.sendMessage(chatId, message);
+    } catch (error) {
+        console.error(`Ошибка отправки сообщения в Telegram: ${error.message}`);
+    }
 }
 
 function calculateBollingerBands(ohlcData: number[][], period: number, multiplier: number): [number, number, number] {
@@ -214,11 +213,10 @@ async function preparePrices(symbol: string, crypto: string, ticker: Ticker): Pr
     const balance = await binance.fetchBalance();
     const balanceCrypto = balance[crypto].free;
     const balanceUSDT = balance.USDT.free;
-    console.log(`Your balance in ${symbol}: ${balanceCrypto}/${balanceUSDT}`);
     await binance.loadMarkets();
     const d10 = await safeAmountToPrecision(symbol, 10.5 / ticker.last);
     const oneOfThirdUSDT = await safeAmountToPrecision(symbol, balanceUSDT / 3 / ticker.last);
-    const toBuy = oneOfThirdUSDT > d10 ? oneOfThirdUSDT : d10;
+    const toBuy = Math.max(oneOfThirdUSDT, d10);
     return {toBuy, balanceCrypto, balanceUSDT, d10};
 }
 async function safeAmountToPrecision(symbol: string, amount: number): Promise<number> {

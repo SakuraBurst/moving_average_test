@@ -41,6 +41,7 @@ class Position {
         this.buyPrice = buyPrice;
         this.amount = amount;
         this.crypto = crypto;
+        this.minSellPrice = buyPrice * (1 + fees[symbol]);
     }
     checkStopLoss() {
         return __awaiter(this, void 0, void 0, function* () {
@@ -58,10 +59,10 @@ class Position {
                     console.log('Стоп-лосс срабатывает, продавать');
                     let order = yield binance.createMarketSellOrder(this.symbol, this.amount);
                     console.log(order);
-                    yield bot.sendMessage(chatId, `Бот сделал стоплосс на цене ${currentPrice} и продал ${this.amount}${this.crypto}`);
+                    yield sendTelegramMessage(`Бот сделал стоплосс на цене ${currentPrice} и продал ${this.amount}${this.crypto}`);
                 }
                 catch (e) {
-                    yield bot.sendMessage(chatId, e.message);
+                    yield sendTelegramMessage(e.message);
                 }
                 return true;
             }
@@ -69,22 +70,60 @@ class Position {
         });
     }
 }
-let positions = [];
-function checkPositions() {
-    return __awaiter(this, void 0, void 0, function* () {
-        for (let i = 0; i < positions.length; i++) {
-            const position = positions[i];
-            const isStopLossTriggered = yield position.checkStopLoss();
-            if (isStopLossTriggered) {
-                positions.splice(i, 1);
-                i--;
+class Positions {
+    constructor() {
+        this.positions = [];
+    }
+    findAllPositionsBySymbol(symbol) {
+        return this.positions.filter(a => a.symbol === symbol);
+    }
+    findAllPositionsByLowestPrice(symbol, ticker) {
+        return this.findAllPositionsBySymbol(symbol).filter(a => ticker.last >= a.minSellPrice);
+    }
+    calculateSellPriceByPositions(symbol, ticker) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const pos = this.findAllPositionsByLowestPrice(symbol, ticker);
+            let amount = 0;
+            for (let i = 0; i < pos.length / 2; i++) {
+                amount += pos[i].amount;
+                this.deletePositionsByAmountAndSymbol(symbol, pos[i].amount);
             }
+            return yield safeAmountToPrecision(symbol, amount);
+        });
+    }
+    deletePositionsByAmountAndSymbol(symbol, amount) {
+        const index = this.positions.findIndex((a) => a.symbol === symbol && a.amount === amount);
+        if (index === -1) {
+            return;
         }
-    });
+        this.positions.splice(index, 1);
+    }
+    stopLossService(interval) {
+        setInterval(() => {
+            this.checkPositions();
+        }, interval);
+    }
+    checkPositions() {
+        return __awaiter(this, void 0, void 0, function* () {
+            for (let i = 0; i < this.positions.length; i++) {
+                const position = this.positions[i];
+                const isStopLossTriggered = yield position.checkStopLoss();
+                if (isStopLossTriggered) {
+                    this.positions.splice(i, 1);
+                    i--;
+                }
+            }
+        });
+    }
+    setPosition(position) {
+        this.positions.push(position);
+    }
 }
+let positions = new Positions();
 function main() {
     return __awaiter(this, void 0, void 0, function* () {
-        stopLossInterval();
+        positions.stopLossService(1000 * 60 * 2);
+        yield calculateFees('ETH/USDT', 'BTC/USDT');
         while (true) {
             console.log(new Date().toLocaleString());
             yield checkCrypto('BTC/USDT', 'BTC');
@@ -93,10 +132,14 @@ function main() {
         }
     });
 }
-function stopLossInterval() {
-    setInterval(() => {
-        checkPositions();
-    }, 1000 * 60 * 2);
+const fees = {};
+function calculateFees(...symbols) {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield binance.loadMarkets();
+        for (const symbol of symbols) {
+            fees[symbol] = binance.market(symbol).taker * 2;
+        }
+    });
 }
 function checkCrypto(symbol, crypto) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -104,27 +147,25 @@ function checkCrypto(symbol, crypto) {
             const historicalOHLCV = yield binance.fetchOHLCV(symbol, config.timeframe);
             const rsi = calculateRSI(historicalOHLCV, config.rsiPeriod);
             const [lowerBB, middleBB, upperBB] = calculateBollingerBands(historicalOHLCV, config.bollingerPeriod, config.bollingerMultiplier);
-            console.log(`RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
             const ticker = yield binance.fetchTicker(symbol);
             const prices = yield preparePrices(symbol, crypto, ticker);
             let rsiLog = "RSI:";
             let bbLog = "BB: ";
             rsiLog += rsi <= 30 ? " Покупать" : rsi > 70 ? " Продавать" : " Сидеть";
             bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть";
-            console.log(rsiLog);
-            console.log(bbLog);
-            // Торговая логика
+            console.log(`Your balance in ${symbol}: ${prices.balanceCrypto}/${prices.balanceUSDT}|${rsiLog} | ${bbLog} | RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
+            const toSell = yield positions.calculateSellPriceByPositions(symbol, ticker);
             if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
                 console.log('Покупать');
                 let order = yield binance.createMarketBuyOrder(symbol, prices.toBuy);
-                positions.push(new Position(symbol, crypto, prices.toBuy, ticker.last));
-                yield bot.sendMessage(chatId, `Бот купил ${prices.toBuy}${crypto} по цене ${ticker.last}`);
+                positions.setPosition(new Position(symbol, crypto, prices.toBuy, ticker.last));
+                yield sendTelegramMessage(`Бот купил ${prices.toBuy}${crypto} по цене ${ticker.last}`);
                 console.log(order);
             }
-            else if (rsi > 70 && ticker.last > upperBB && prices.balanceCrypto > prices.d10) {
+            else if (rsi > 70 && ticker.last > upperBB && toSell > prices.d10) {
                 console.log('Продавать');
-                let order = yield binance.createMarketSellOrder(symbol, prices.toSell);
-                yield bot.sendMessage(chatId, `Бот продал ${prices.toSell}${crypto} по цене ${ticker.last}`);
+                let order = yield binance.createMarketSellOrder(symbol, toSell);
+                yield sendTelegramMessage(`Бот продал ${toSell}${crypto} по цене ${ticker.last}`);
                 console.log(order);
             }
             else {
@@ -133,6 +174,16 @@ function checkCrypto(symbol, crypto) {
         }
         catch (e) {
             console.log(e);
+        }
+    });
+}
+function sendTelegramMessage(message) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            yield bot.sendMessage(chatId, message);
+        }
+        catch (error) {
+            console.error(`Ошибка отправки сообщения в Telegram: ${error.message}`);
         }
     });
 }
@@ -161,14 +212,11 @@ function preparePrices(symbol, crypto, ticker) {
         const balance = yield binance.fetchBalance();
         const balanceCrypto = balance[crypto].free;
         const balanceUSDT = balance.USDT.free;
-        console.log(`Your balance in ${symbol}: ${balanceCrypto}/${balanceUSDT}`);
         yield binance.loadMarkets();
         const d10 = yield safeAmountToPrecision(symbol, 10.5 / ticker.last);
-        const oneOfThird = yield safeAmountToPrecision(symbol, balanceCrypto / 2);
         const oneOfThirdUSDT = yield safeAmountToPrecision(symbol, balanceUSDT / 3 / ticker.last);
-        const toBuy = oneOfThirdUSDT > d10 ? oneOfThirdUSDT : d10;
-        const toSell = oneOfThird > d10 ? oneOfThird : d10;
-        return { toBuy, toSell, balanceCrypto, balanceUSDT, d10 };
+        const toBuy = Math.max(oneOfThirdUSDT, d10);
+        return { toBuy, balanceCrypto, balanceUSDT, d10 };
     });
 }
 function safeAmountToPrecision(symbol, amount) {
