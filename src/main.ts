@@ -28,6 +28,7 @@ class Position {
     crypto: string
     buyPrice: number
     amount:number
+    minSellPrice:number
     stopLossPercentage:number = 0.95// Значение стоп-лосса (5%)
     constructor(symbol:string, crypto: string, buyPrice: number, amount: number|undefined) {
         if (amount === undefined) {
@@ -37,6 +38,7 @@ class Position {
         this.buyPrice = buyPrice;
         this.amount = amount;
         this.crypto = crypto
+        this.minSellPrice = buyPrice * (1+ fees[symbol])
     }
 
     async checkStopLoss() {
@@ -65,7 +67,50 @@ class Position {
     }
 }
 
-let positions: Position[] = [];
+class Positions {
+    positions: Position[] = []
+
+    private findAllPositionsBySymbol(symbol:string): Position[] {
+        return this.positions.filter(a => a.symbol === symbol)
+    }
+
+    private findAllPositionsByLowestPrice(symbol:string, ticker: Ticker) {
+        return this.findAllPositionsBySymbol(symbol).filter(a => ticker.last >= a.minSellPrice )
+    }
+
+    async calculateSellPriceByPositions(symbol: string, ticker:Ticker):number {
+        const pos = this.findAllPositionsByLowestPrice(symbol, ticker)
+        let amount = 0
+        for (let i = 0; i < pos.length/2; i++) {
+            amount+=pos[i].amount
+        }
+        return await safeAmountToPrecision(symbol, amount);
+    }
+
+    stopLossService(interval:number) {
+        setInterval(() => {
+            this.checkPositions()
+        }, interval)
+    }
+
+    async checkPositions() {
+        for (let i = 0; i < this.positions.length; i++) {
+            const position = this.positions[i];
+            const isStopLossTriggered = await position.checkStopLoss();
+            if (isStopLossTriggered) {
+                this.positions.splice(i, 1);
+                i--;
+            }
+        }
+    }
+
+
+    setPosition(position: Position) {
+        this.positions.push(position)
+    }
+}
+
+let positions = new Positions()
 
 
 async function checkPositions() {
@@ -80,7 +125,7 @@ async function checkPositions() {
 }
 
 async function main() {
-    stopLossInterval()
+    positions.stopLossService(1000 * 60 * 2)
     await calculateFees('ETH/USDT', 'BTC/USDT')
     while (true) {
         console.log(new Date().toLocaleString())
@@ -100,13 +145,7 @@ async function calculateFees(...symbols:string[]):Promise<void> {
 
 
 }
-function stopLossInterval():void{
-    setInterval(() => {
-        checkPositions()
-    }, 1000 * 60 * 2)
-}
 
-let minSellPrice = Infinity
 
 async function checkCrypto(symbol:string, crypto:string):Promise<void> {
     try {
@@ -122,15 +161,13 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
         bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть"
         console.log(rsiLog)
         console.log(bbLog)
-        // Торговая логика
+        const allSymbolPositions = positions.find(a => a.symbol === symbol && ticker.last >= a.minSellPrice)
+
         if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
             console.log('Покупать');
             let order = await  binance.createMarketBuyOrder(symbol, prices.toBuy)
             positions.push(new Position(symbol,crypto, prices.toBuy, ticker.last))
             await bot.sendMessage(chatId, `Бот купил ${prices.toBuy}${crypto} по цене ${ticker.last}`)
-            if (ticker.last < minSellPrice) {
-                    minSellPrice = ticker.last !== undefined ? ticker.last * (1 + fees[symbol]) : Infinity
-            }
             console.log(order)
         } else if (rsi > 70 && ticker.last > upperBB && prices.balanceCrypto > prices.d10 && ticker.last >= minSellPrice) {
             console.log('Продавать');
@@ -143,6 +180,10 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
     } catch (e) {
         console.log(e);
     }
+}
+
+function calculateSellAmount(ticker: Ticker) {
+
 }
 
 function calculateBollingerBands(ohlcData: number[][], period: number, multiplier: number): [number, number, number] {
@@ -169,18 +210,16 @@ function calculateMovingAverage(ohlcData: number[][], period: number):number {
     return sum / count;
 }
 
-async function preparePrices(symbol: string, crypto: string, ticker: Ticker): Promise<{balanceCrypto:number, balanceUSDT:number, toBuy: number, toSell: number, d10: number}> {
+async function preparePrices(symbol: string, crypto: string, ticker: Ticker): Promise<{balanceCrypto:number, balanceUSDT:number, toBuy: number, d10: number}> {
     const balance = await binance.fetchBalance();
     const balanceCrypto = balance[crypto].free;
     const balanceUSDT = balance.USDT.free;
     console.log(`Your balance in ${symbol}: ${balanceCrypto}/${balanceUSDT}`);
     await binance.loadMarkets();
     const d10 = await safeAmountToPrecision(symbol, 10.5 / ticker.last);
-    const oneOfThird = await safeAmountToPrecision(symbol, balanceCrypto / 2);
     const oneOfThirdUSDT = await safeAmountToPrecision(symbol, balanceUSDT / 3 / ticker.last);
     const toBuy = oneOfThirdUSDT > d10 ? oneOfThirdUSDT : d10;
-    const toSell = oneOfThird > d10 ? oneOfThird : d10;
-    return {toBuy, toSell, balanceCrypto, balanceUSDT, d10};
+    return {toBuy, balanceCrypto, balanceUSDT, d10};
 }
 async function safeAmountToPrecision(symbol: string, amount: number): Promise<number> {
     try {
