@@ -83,6 +83,8 @@ class Positions {
     calculateSellPriceByPositions(symbol, ticker) {
         return __awaiter(this, void 0, void 0, function* () {
             const pos = this.findAllPositionsByLowestPrice(symbol, ticker);
+            console.log('calculateSellPriceByPositions ', pos);
+            console.log('this.positions ', this.positions);
             let amount = 0;
             for (let i = 0; i < pos.length / 2; i++) {
                 amount += pos[i].amount;
@@ -155,6 +157,7 @@ function checkCrypto(symbol, crypto) {
             bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть";
             console.log(`Your balance in ${symbol}: ${prices.balanceCrypto}/${prices.balanceUSDT}|${rsiLog} | ${bbLog} | RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
             const toSell = yield positions.calculateSellPriceByPositions(symbol, ticker);
+            console.log('toSell ', toSell);
             if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
                 console.log('Покупать');
                 let order = yield binance.createMarketBuyOrder(symbol, prices.toBuy);

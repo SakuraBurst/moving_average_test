@@ -1,6 +1,5 @@
 import {Ticker} from "ccxt";
 import TelegramBot from "node-telegram-bot-api";
-import {number} from "ccxt/js/src/static_dependencies/noble-hashes/_assert";
 
 let ccxt = require('ccxt');
 
@@ -80,6 +79,8 @@ class Positions {
 
     async calculateSellPriceByPositions(symbol: string, ticker:Ticker):Promise<number> {
         const pos = this.findAllPositionsByLowestPrice(symbol, ticker)
+        console.log('calculateSellPriceByPositions ', pos)
+        console.log('this.positions ', this.positions)
         let amount = 0
         for (let i = 0; i < pos.length/2; i++) {
             amount+=pos[i].amount
@@ -158,6 +159,7 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
         bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть"
         console.log(`Your balance in ${symbol}: ${prices.balanceCrypto}/${prices.balanceUSDT}|${rsiLog} | ${bbLog} | RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
         const toSell = await positions.calculateSellPriceByPositions(symbol, ticker)
+        console.log('toSell ', toSell)
         if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
             console.log('Покупать');
             let order = await  binance.createMarketBuyOrder(symbol, prices.toBuy)
