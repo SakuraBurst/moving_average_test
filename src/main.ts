@@ -158,7 +158,6 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
         rsiLog += rsi <= 30  ? " Покупать" : rsi > 70  ? " Продавать" : " Сидеть"
         bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть"
         console.log(`Your balance in ${symbol}: ${prices.balanceCrypto}/${prices.balanceUSDT}|${rsiLog} | ${bbLog} | RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
-        const toSell = await positions.calculateSellPriceByPositions(symbol, ticker)
         console.log('toSell ', toSell)
         if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
             console.log('Покупать');
@@ -166,7 +165,8 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
             positions.setPosition(new Position(symbol,crypto, prices.toBuy, ticker.last))
             await sendTelegramMessage(`Бот купил ${prices.toBuy}${crypto} по цене ${ticker.last}`)
             console.log(order)
-        } else if (rsi > 70 && ticker.last > upperBB && toSell > prices.d10) {
+        } else if (rsi > 70 && ticker.last > upperBB && prices.balanceCrypto > prices.d10) {
+            const toSell = await positions.calculateSellPriceByPositions(symbol, ticker)
             console.log('Продавать');
             let order = await  binance.createMarketSellOrder(symbol, toSell)
             await sendTelegramMessage( `Бот продал ${toSell}${crypto} по цене ${ticker.last}`)
