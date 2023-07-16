@@ -48,12 +48,12 @@ class Position {
         if (prices.balanceCrypto < prices.d10) {
             return true
         }
-        if (prices.balanceCrypto < this.amount){
-            this.amount = prices.balanceCrypto
-        }
+        console.log(this)
+        console.log({currentPrice, ticker})
         if (currentPrice <= this.buyPrice * this.stopLossPercentage) {
             try {
                 console.log('Стоп-лосс срабатывает, продавать');
+                console.log(this)
                 let order = await binance.createMarketSellOrder(this.symbol, this.amount);
                 console.log(order);
                 await sendTelegramMessage(`Бот сделал стоплосс на цене ${currentPrice} и продал ${this.amount}${this.crypto}`)
@@ -122,24 +122,39 @@ class Positions {
 
 let positions = new Positions()
 
+type cryptoinfo =  {
+    symbol: string
+    crypto: string
+}
+
+let cryptos : cryptoinfo[] = [
+    {symbol:'BTC/USDT', crypto:"BTC"},
+    {symbol:'ETH/USDT', crypto:"ETH"},
+    {symbol:'BNB/USDT', crypto:"BNB"},
+    {symbol:'SOL/USDT', crypto:"SOL"},
+    {symbol:'LTC/USDT', crypto:"LTC"},
+]
 
 async function main() {
     positions.stopLossService(1000 * 60 * 2)
-    await calculateFees('ETH/USDT', 'BTC/USDT')
+    await calculateFees(...cryptos)
+    let i :number = 0
+    let timeout = (1000 * 60 * 15) / cryptos.length
     while (true) {
         console.log(new Date().toLocaleString())
-        await checkCrypto('BTC/USDT', 'BTC');
-        await checkCrypto('ETH/USDT', 'ETH');
-        await sleep(1000 * 60 * 15);
+        await checkCrypto(cryptos[i].symbol, cryptos[i].crypto)
+        i++
+        i = i % cryptos.length
+        await sleep(timeout);
     }
 }
 
 const fees: { [k: string]: number } = {}
 
-async function calculateFees(...symbols:string[]):Promise<void> {
+async function calculateFees(...cryptos:cryptoinfo[]):Promise<void> {
     await binance.loadMarkets();
-    for (const symbol of symbols) {
-        fees[symbol] = binance.market(symbol).taker * 2
+    for (const crypto of cryptos) {
+        fees[crypto.symbol] = binance.market(crypto.symbol).taker * 2
     }
 
 
@@ -158,7 +173,6 @@ async function checkCrypto(symbol:string, crypto:string):Promise<void> {
         rsiLog += rsi <= 30  ? " Покупать" : rsi > 70  ? " Продавать" : " Сидеть"
         bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть"
         console.log(`Your balance in ${symbol}: ${prices.balanceCrypto}/${prices.balanceUSDT}|${rsiLog} | ${bbLog} | RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
-        console.log('toSell ', toSell)
         if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
             console.log('Покупать');
             let order = await  binance.createMarketBuyOrder(symbol, prices.toBuy)

@@ -51,12 +51,12 @@ class Position {
             if (prices.balanceCrypto < prices.d10) {
                 return true;
             }
-            if (prices.balanceCrypto < this.amount) {
-                this.amount = prices.balanceCrypto;
-            }
+            console.log(this);
+            console.log({ currentPrice, ticker });
             if (currentPrice <= this.buyPrice * this.stopLossPercentage) {
                 try {
                     console.log('Стоп-лосс срабатывает, продавать');
+                    console.log(this);
                     let order = yield binance.createMarketSellOrder(this.symbol, this.amount);
                     console.log(order);
                     yield sendTelegramMessage(`Бот сделал стоплосс на цене ${currentPrice} и продал ${this.amount}${this.crypto}`);
@@ -122,24 +122,34 @@ class Positions {
     }
 }
 let positions = new Positions();
+let cryptos = [
+    { symbol: 'BTC/USDT', crypto: "BTC" },
+    { symbol: 'ETH/USDT', crypto: "ETH" },
+    { symbol: 'BNB/USDT', crypto: "BNB" },
+    { symbol: 'SOL/USDT', crypto: "SOL" },
+    { symbol: 'LTC/USDT', crypto: "LTC" },
+];
 function main() {
     return __awaiter(this, void 0, void 0, function* () {
         positions.stopLossService(1000 * 60 * 2);
-        yield calculateFees('ETH/USDT', 'BTC/USDT');
+        yield calculateFees(...cryptos);
+        let i = 0;
+        let timeout = (1000 * 60 * 15) / cryptos.length;
         while (true) {
             console.log(new Date().toLocaleString());
-            yield checkCrypto('BTC/USDT', 'BTC');
-            yield checkCrypto('ETH/USDT', 'ETH');
-            yield sleep(1000 * 60 * 15);
+            yield checkCrypto(cryptos[i].symbol, cryptos[i].crypto);
+            i++;
+            i = i % cryptos.length;
+            yield sleep(timeout);
         }
     });
 }
 const fees = {};
-function calculateFees(...symbols) {
+function calculateFees(...cryptos) {
     return __awaiter(this, void 0, void 0, function* () {
         yield binance.loadMarkets();
-        for (const symbol of symbols) {
-            fees[symbol] = binance.market(symbol).taker * 2;
+        for (const crypto of cryptos) {
+            fees[crypto.symbol] = binance.market(crypto.symbol).taker * 2;
         }
     });
 }
@@ -156,8 +166,6 @@ function checkCrypto(symbol, crypto) {
             rsiLog += rsi <= 30 ? " Покупать" : rsi > 70 ? " Продавать" : " Сидеть";
             bbLog += ticker.last <= lowerBB ? " Покупать" : ticker.last > upperBB ? " Продавать" : " Сидеть";
             console.log(`Your balance in ${symbol}: ${prices.balanceCrypto}/${prices.balanceUSDT}|${rsiLog} | ${bbLog} | RSI: ${rsi}, Lower BB: ${lowerBB}, Middle BB: ${middleBB}, Upper BB: ${upperBB}`);
-            const toSell = yield positions.calculateSellPriceByPositions(symbol, ticker);
-            console.log('toSell ', toSell);
             if (rsi <= 30 && ticker.last <= lowerBB && prices.balanceUSDT > 10.5) {
                 console.log('Покупать');
                 let order = yield binance.createMarketBuyOrder(symbol, prices.toBuy);
@@ -165,7 +173,8 @@ function checkCrypto(symbol, crypto) {
                 yield sendTelegramMessage(`Бот купил ${prices.toBuy}${crypto} по цене ${ticker.last}`);
                 console.log(order);
             }
-            else if (rsi > 70 && ticker.last > upperBB && toSell > prices.d10) {
+            else if (rsi > 70 && ticker.last > upperBB && prices.balanceCrypto > prices.d10) {
+                const toSell = yield positions.calculateSellPriceByPositions(symbol, ticker);
                 console.log('Продавать');
                 let order = yield binance.createMarketSellOrder(symbol, toSell);
                 yield sendTelegramMessage(`Бот продал ${toSell}${crypto} по цене ${ticker.last}`);
